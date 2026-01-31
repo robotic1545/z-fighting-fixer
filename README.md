@@ -16,7 +16,7 @@ A powerful Blockbench plugin that automatically detects and fixes z-fighting iss
 ## Installation
 
 ### Method 1: From File (Recommended)
-1. Download `z_fighting_fixer.js` from the [latest release](https://github.com/yourusername/z-fighting-fixer/releases)
+1. Download `z_fighting_fixer.js` from the [latest release](https://github.com/robotic1545/z-fighting-fixer/releases)
 2. Open Blockbench
 3. Go to **File → Plugins**
 4. Click **"Load Plugin from File"**
