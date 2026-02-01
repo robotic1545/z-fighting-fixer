@@ -133,9 +133,9 @@ MIT License - See LICENSE file for details
 
 ## Credits
 
-Created by Claude  
-Icon design: Custom pixel art
+Created by Robotic1545
+Icon design: DragonStudios
 
 ---
 
-**Enjoy z-fighting free models!** 🎮✨
+**Enjoy z-fighting free plugin!** 🎮✨
