@@ -2,17 +2,18 @@
   
   let detectAction, fixAction, settingsAction;
   let settings = {
-    inflateAmount: 0.05,
-    tolerance: 0.001,
-    autoRecheck: true
+    separationAmount: 0.001,
+    tolerance: 0.01, // Daha büyük - sadece gerçek iç içe girmeleri yakalar
+    autoRecheck: true,
+    fixMethod: 'inflate' // 'separate' or 'inflate'
   };
   
   Plugin.register('z_fighting_fixer', {
     title: 'Z-Fighting Fixer',
-    author: 'Claude',
-    description: 'Detects and automatically fixes z-fighting issues',
+    author: 'robotic1545',
+    description: 'Detects and automatically fixes z-fighting and overlapping issues',
     icon: 'build',
-    version: '2.0.0',
+    version: '2.1.0',
     variant: 'both',
     
     onload() {
@@ -29,7 +30,7 @@
       // Detect action
       detectAction = new Action('detect_z_fighting', {
         name: 'Detect Z-Fighting',
-        description: 'Find overlapping faces',
+        description: 'Find overlapping faces and cubes',
         icon: 'search',
         click: function() {
           detectZFighting(false);
@@ -65,14 +66,24 @@
       title: 'Z-Fighting Fixer Settings',
       width: 500,
       form: {
-        inflateAmount: {
-          label: 'Inflate Amount',
+        fixMethod: {
+          label: 'Fix Method',
+          type: 'select',
+          value: settings.fixMethod,
+          options: {
+            inflate: 'Inflate Cubes (Recommended)',
+            separate: 'Separate Cubes (Move Apart)'
+          },
+          description: 'How to fix overlapping cubes'
+        },
+        separationAmount: {
+          label: 'Separation Amount',
           type: 'number',
-          value: settings.inflateAmount,
+          value: settings.separationAmount,
           min: 0.001,
           max: 1,
           step: 0.001,
-          description: 'How much to inflate cubes (higher = more separation)'
+          description: 'Distance to move cubes apart (higher = more separation)'
         },
         tolerance: {
           label: 'Detection Tolerance',
@@ -91,7 +102,8 @@
         }
       },
       onConfirm: function(formData) {
-        settings.inflateAmount = parseFloat(formData.inflateAmount);
+        settings.fixMethod = formData.fixMethod;
+        settings.separationAmount = parseFloat(formData.separationAmount);
         settings.tolerance = parseFloat(formData.tolerance);
         settings.autoRecheck = formData.autoRecheck;
         
@@ -127,19 +139,19 @@
     
     let conflicts = [];
     
-    // Check all cubes
+    // Check all cubes for overlaps
     for (let i = 0; i < cubes.length; i++) {
       for (let j = i + 1; j < cubes.length; j++) {
         let cube1 = cubes[i];
         let cube2 = cubes[j];
         
-        let faces = checkFaceOverlap(cube1, cube2, settings.tolerance);
+        let overlapInfo = checkCubeOverlap(cube1, cube2, settings.tolerance);
         
-        if (faces.length > 0) {
+        if (overlapInfo.overlapping) {
           conflicts.push({
             cube1: cube1,
             cube2: cube2,
-            faces: faces,
+            overlapInfo: overlapInfo,
             cube1Name: cube1.name || `Cube ${i}`,
             cube2Name: cube2.name || `Cube ${j}`
           });
@@ -164,49 +176,110 @@
     }
   }
   
+  function checkCubeOverlap(cube1, cube2, tolerance) {
+    // Get bounding boxes WITH inflate applied
+    let inflate1 = cube1.inflate || 0;
+    let inflate2 = cube2.inflate || 0;
+    
+    console.log(`Checking: ${cube1.name} (inflate: ${inflate1}) vs ${cube2.name} (inflate: ${inflate2})`);
+    
+    let box1 = {
+      minX: Math.min(cube1.from[0], cube1.to[0]) - inflate1,
+      maxX: Math.max(cube1.from[0], cube1.to[0]) + inflate1,
+      minY: Math.min(cube1.from[1], cube1.to[1]) - inflate1,
+      maxY: Math.max(cube1.from[1], cube1.to[1]) + inflate1,
+      minZ: Math.min(cube1.from[2], cube1.to[2]) - inflate1,
+      maxZ: Math.max(cube1.from[2], cube1.to[2]) + inflate1
+    };
+    
+    let box2 = {
+      minX: Math.min(cube2.from[0], cube2.to[0]) - inflate2,
+      maxX: Math.max(cube2.from[0], cube2.to[0]) + inflate2,
+      minY: Math.min(cube2.from[1], cube2.to[1]) - inflate2,
+      maxY: Math.max(cube2.from[1], cube2.to[1]) + inflate2,
+      minZ: Math.min(cube2.from[2], cube2.to[2]) - inflate2,
+      maxZ: Math.max(cube2.from[2], cube2.to[2]) + inflate2
+    };
+    
+    // Check for 3D overlap (cubes inside each other) - bu hata!
+    let overlapX = Math.max(0, Math.min(box1.maxX, box2.maxX) - Math.max(box1.minX, box2.minX));
+    let overlapY = Math.max(0, Math.min(box1.maxY, box2.maxY) - Math.max(box1.minY, box2.minY));
+    let overlapZ = Math.max(0, Math.min(box1.maxZ, box2.maxZ) - Math.max(box1.minZ, box2.minZ));
+    
+    console.log(`  Overlap: X=${overlapX.toFixed(3)}, Y=${overlapY.toFixed(3)}, Z=${overlapZ.toFixed(3)}, Tolerance=${tolerance}`);
+    
+    // Sadece gerçek 3D overlap hata sayılır - tolerance'dan FAZLA iç içe girme
+    // Yan yana (touching) küpler bu testi geçemez çünkü bir eksende 0 overlap var
+    let is3DOverlap = overlapX > tolerance && overlapY > tolerance && overlapZ > tolerance;
+    
+    console.log(`  Result: ${is3DOverlap ? 'OVERLAP!' : 'OK'}`);
+    
+    // Face overlaps hiç kontrol etme - yan yana küpler normal
+    let faces = [];
+    
+    return {
+      overlapping: is3DOverlap, // SADECE 3D overlap hata
+      is3DOverlap: is3DOverlap,
+      faces: faces,
+      overlapAmount: {
+        x: overlapX,
+        y: overlapY,
+        z: overlapZ
+      }
+    };
+  }
+  
+  function boxesOverlap2D(min1a, max1a, min1b, max1b, min2a, max2a, min2b, max2b) {
+    return !(max1a < min2a || min1a > max2a || max1b < min2b || min1b > max2b);
+  }
+  
   function showFixDialog(conflicts) {
     let conflictList = '';
     conflicts.forEach((conflict, index) => {
-      conflictList += `#${index + 1}: ${conflict.cube1Name} ↔ ${conflict.cube2Name} (${conflict.faces.join(', ')})\n`;
+      let type = conflict.overlapInfo.is3DOverlap ? '3D Overlap' : 'Face Overlap';
+      let details = conflict.overlapInfo.is3DOverlap 
+        ? `(${conflict.overlapInfo.overlapAmount.x.toFixed(2)}×${conflict.overlapInfo.overlapAmount.y.toFixed(2)}×${conflict.overlapInfo.overlapAmount.z.toFixed(2)})`
+        : `(${conflict.overlapInfo.faces.join(', ')})`;
+      conflictList += `#${index + 1}: ${conflict.cube1Name} ↔ ${conflict.cube2Name}\n  Type: ${type} ${details}\n`;
     });
     
     let dialog = new Dialog({
       id: 'z_fighting_fix_dialog',
-      title: 'Fix Z-Fighting Issues',
+      title: 'Fix Z-Fighting & Overlaps',
       width: 550,
       lines: [
         `<div style="padding: 15px; background: #2a2a2a; border-radius: 5px; margin-bottom: 15px;">
-          <h3 style="color: #ff9800; margin-top: 0;">⚠️ Found ${conflicts.length} Z-Fighting Issue(s)</h3>
+          <h3 style="color: #ff9800; margin-top: 0;">⚠️ Found ${conflicts.length} Issue(s)</h3>
           <pre style="color: #ccc; font-size: 12px; max-height: 200px; overflow-y: auto; background: #1e1e1e; padding: 10px; border-radius: 3px;">${conflictList}</pre>
         </div>
         <div style="padding: 10px; background: #1e3a1e; border-radius: 5px; border-left: 3px solid #4caf50;">
-          <strong style="color: #4caf50;">Fix Method:</strong> Apply inflate to conflicting cubes<br>
-          <strong style="color: #4caf50;">Inflate Amount:</strong> ${settings.inflateAmount}
+          <strong style="color: #4caf50;">Fix Method:</strong> ${settings.fixMethod === 'separate' ? 'Separate cubes by moving them apart' : 'Inflate cubes to create separation'}<br>
+          <strong style="color: #4caf50;">Amount:</strong> ${settings.separationAmount}
         </div>`
       ],
       form: {
         fixMethod: {
           label: 'Fix Method',
           type: 'select',
-          value: 'inflate_second',
+          value: settings.fixMethod,
           options: {
-            inflate_second: 'Inflate second cube only',
-            inflate_both: 'Inflate both cubes',
-            inflate_all: 'Inflate all conflicting cubes'
+            inflate: 'Inflate Cubes (Recommended)',
+            separate: 'Separate Cubes'
           }
         },
-        customInflate: {
-          label: 'Override Inflate Amount (optional)',
+        customAmount: {
+          label: 'Override Amount (optional)',
           type: 'number',
-          value: settings.inflateAmount,
+          value: settings.separationAmount,
           min: 0.001,
           max: 1,
           step: 0.001
         }
       },
       onConfirm: function(formData) {
-        let inflateToUse = formData.customInflate || settings.inflateAmount;
-        fixConflicts(conflicts, formData.fixMethod, inflateToUse);
+        let method = formData.fixMethod;
+        let amount = formData.customAmount || settings.separationAmount;
+        fixConflicts(conflicts, method, amount);
         dialog.hide();
       }
     });
@@ -214,19 +287,11 @@
     dialog.show();
   }
   
-  function fixConflicts(conflicts, method, inflateAmount) {
+  function fixConflicts(conflicts, method, amount) {
     let cubesToFix = new Set();
     
     conflicts.forEach((conflict) => {
-      if (method === 'inflate_second') {
-        cubesToFix.add(conflict.cube2);
-      } else if (method === 'inflate_both') {
-        cubesToFix.add(conflict.cube1);
-        cubesToFix.add(conflict.cube2);
-      } else if (method === 'inflate_all') {
-        cubesToFix.add(conflict.cube1);
-        cubesToFix.add(conflict.cube2);
-      }
+      cubesToFix.add(conflict.cube2);
     });
     
     let cubesArray = Array.from(cubesToFix);
@@ -234,28 +299,68 @@
     
     let fixedCount = 0;
     
-    cubesArray.forEach((cube) => {
-      let oldInflate = cube.inflate || 0;
-      
-      if (cube.inflate === undefined || cube.inflate === 0) {
-        cube.inflate = inflateAmount;
-      } else {
-        cube.inflate += inflateAmount;
-      }
-      
-      console.log(`${cube.name}: inflate ${oldInflate} → ${cube.inflate}`);
-      fixedCount++;
-    });
+    if (method === 'inflate') {
+      // Inflate method (old way)
+      cubesArray.forEach((cube) => {
+        let oldInflate = cube.inflate || 0;
+        
+        if (cube.inflate === undefined || cube.inflate === 0) {
+          cube.inflate = amount;
+        } else {
+          cube.inflate += amount;
+        }
+        
+        console.log(`${cube.name}: inflate ${oldInflate} → ${cube.inflate}`);
+        fixedCount++;
+      });
+    } else {
+      // Separate method (move cubes apart)
+      conflicts.forEach((conflict) => {
+        let cube1 = conflict.cube1;
+        let cube2 = conflict.cube2;
+        let overlapInfo = conflict.overlapInfo;
+        
+        if (overlapInfo.is3DOverlap) {
+          // 3D overlap - separate along the axis with most overlap
+          let maxOverlap = Math.max(overlapInfo.overlapAmount.x, overlapInfo.overlapAmount.y, overlapInfo.overlapAmount.z);
+          
+          if (maxOverlap === overlapInfo.overlapAmount.x) {
+            // Separate on X axis
+            let direction = cube2.from[0] > cube1.from[0] ? 1 : -1;
+            cube2.from[0] += direction * (overlapInfo.overlapAmount.x + amount);
+            cube2.to[0] += direction * (overlapInfo.overlapAmount.x + amount);
+          } else if (maxOverlap === overlapInfo.overlapAmount.y) {
+            // Separate on Y axis
+            let direction = cube2.from[1] > cube1.from[1] ? 1 : -1;
+            cube2.from[1] += direction * (overlapInfo.overlapAmount.y + amount);
+            cube2.to[1] += direction * (overlapInfo.overlapAmount.y + amount);
+          } else {
+            // Separate on Z axis
+            let direction = cube2.from[2] > cube1.from[2] ? 1 : -1;
+            cube2.from[2] += direction * (overlapInfo.overlapAmount.z + amount);
+            cube2.to[2] += direction * (overlapInfo.overlapAmount.z + amount);
+          }
+          fixedCount++;
+        } else if (overlapInfo.faces.length > 0) {
+          // Face overlap - use inflate for now
+          if (cube2.inflate === undefined || cube2.inflate === 0) {
+            cube2.inflate = amount;
+          } else {
+            cube2.inflate += amount;
+          }
+          fixedCount++;
+        }
+      });
+    }
     
     updateView();
     Undo.finishEdit('Fixed Z-Fighting');
     
-    Blockbench.showQuickMessage(`✓ Fixed ${fixedCount} cube(s) with inflate!`, 3000);
+    Blockbench.showQuickMessage(`✓ Fixed ${fixedCount} issue(s)!`, 3000);
     
     // Auto recheck if enabled
     if (settings.autoRecheck) {
       setTimeout(() => {
-        console.log('Auto rechecking...');
         detectZFighting(false);
       }, 500);
     }
@@ -268,55 +373,6 @@
     }
   }
   
-  function checkFaceOverlap(cube1, cube2, tolerance) {
-    let overlappingFaces = [];
-    
-    let box1 = {
-      minX: Math.min(cube1.from[0], cube1.to[0]),
-      maxX: Math.max(cube1.from[0], cube1.to[0]),
-      minY: Math.min(cube1.from[1], cube1.to[1]),
-      maxY: Math.max(cube1.from[1], cube1.to[1]),
-      minZ: Math.min(cube1.from[2], cube1.to[2]),
-      maxZ: Math.max(cube1.from[2], cube1.to[2])
-    };
-    
-    let box2 = {
-      minX: Math.min(cube2.from[0], cube2.to[0]),
-      maxX: Math.max(cube2.from[0], cube2.to[0]),
-      minY: Math.min(cube2.from[1], cube2.to[1]),
-      maxY: Math.max(cube2.from[1], cube2.to[1]),
-      minZ: Math.min(cube2.from[2], cube2.to[2]),
-      maxZ: Math.max(cube2.from[2], cube2.to[2])
-    };
-    
-    // Check X axis
-    if (Math.abs(box1.maxX - box2.minX) < tolerance || Math.abs(box1.minX - box2.maxX) < tolerance) {
-      if (boxesOverlap2D(box1.minY, box1.maxY, box1.minZ, box1.maxZ, box2.minY, box2.maxY, box2.minZ, box2.maxZ)) {
-        overlappingFaces.push('X-axis');
-      }
-    }
-    
-    // Check Y axis
-    if (Math.abs(box1.maxY - box2.minY) < tolerance || Math.abs(box1.minY - box2.maxY) < tolerance) {
-      if (boxesOverlap2D(box1.minX, box1.maxX, box1.minZ, box1.maxZ, box2.minX, box2.maxX, box2.minZ, box2.maxZ)) {
-        overlappingFaces.push('Y-axis');
-      }
-    }
-    
-    // Check Z axis
-    if (Math.abs(box1.maxZ - box2.minZ) < tolerance || Math.abs(box1.minZ - box2.maxZ) < tolerance) {
-      if (boxesOverlap2D(box1.minX, box1.maxX, box1.minY, box1.maxY, box2.minX, box2.maxX, box2.minY, box2.maxY)) {
-        overlappingFaces.push('Z-axis');
-      }
-    }
-    
-    return overlappingFaces;
-  }
-  
-  function boxesOverlap2D(min1a, max1a, min1b, max1b, min2a, max2a, min2b, max2b) {
-    return !(max1a < min2a || min1a > max2a || max1b < min2b || min1b > max2b);
-  }
-  
   function showResults(conflicts) {
     if (conflicts.length === 0) {
       new Dialog({
@@ -326,7 +382,7 @@
         lines: [
           `<div style="padding: 20px; text-align: center; background: #1e3a1e; border-radius: 5px; border: 2px solid #4caf50;">
             <h2 style="color: #4caf50; margin: 0;">✓ No Issues Found!</h2>
-            <p style="color: #ccc; margin-top: 10px;">Your model has no z-fighting problems.</p>
+            <p style="color: #ccc; margin-top: 10px;">Your model has no z-fighting or overlap problems.</p>
           </div>`
         ],
         buttons: ['dialog.ok']
@@ -353,7 +409,7 @@
           color: #aaa;
           font-size: 12px;
         }
-        .face-list {
+        .conflict-type {
           color: #ffeb3b;
           font-size: 12px;
           margin-top: 3px;
@@ -378,16 +434,22 @@
         }
       </style>
       <div class="summary">
-        ⚠️ Found ${conflicts.length} Z-Fighting Issue(s)
+        ⚠️ Found ${conflicts.length} Issue(s)
       </div>
     `;
     
     conflicts.forEach((conflict, index) => {
+      let type = conflict.overlapInfo.is3DOverlap ? '🔴 3D Overlap (Cubes Inside Each Other)' : '🟡 Face Overlap (Z-Fighting)';
+      let details = conflict.overlapInfo.is3DOverlap 
+        ? `Size: ${conflict.overlapInfo.overlapAmount.x.toFixed(2)}×${conflict.overlapInfo.overlapAmount.y.toFixed(2)}×${conflict.overlapInfo.overlapAmount.z.toFixed(2)}`
+        : `Faces: ${conflict.overlapInfo.faces.join(', ')}`;
+      
       reportHTML += `
         <div class="conflict-item">
-          <div class="conflict-header">Conflict #${index + 1}</div>
+          <div class="conflict-header">Issue #${index + 1}</div>
           <div class="conflict-detail">📦 ${conflict.cube1Name} ↔️ ${conflict.cube2Name}</div>
-          <div class="face-list">🔍 Overlapping: ${conflict.faces.join(', ')}</div>
+          <div class="conflict-type">${type}</div>
+          <div class="conflict-type">${details}</div>
         </div>
       `;
     });
@@ -400,20 +462,11 @@
     
     new Dialog({
       id: 'z_fighting_results',
-      title: 'Z-Fighting Detection Report',
+      title: 'Z-Fighting & Overlap Report',
       width: 550,
       lines: [reportHTML],
       buttons: ['dialog.ok']
     }).show();
-    
-    // Log to console
-    console.log('=== Z-Fighting Report ===');
-    conflicts.forEach((conflict, index) => {
-      console.log(`Conflict #${index + 1}:`);
-      console.log(`  Cube 1: ${conflict.cube1Name}`);
-      console.log(`  Cube 2: ${conflict.cube2Name}`);
-      console.log(`  Overlapping: ${conflict.faces.join(', ')}`);
-    });
   }
   
 })();
